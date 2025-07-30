@@ -3,47 +3,73 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import json
+from urllib.parse import quote
 
 def obter_dados_summoner(nome_invocador: str, regiao: str, id_por_nome_campeao: dict):
     """Busca e extrai todos os dados do perfil de um invocador no League of Graphs."""
-    nome_invocador = nome_invocador.strip().replace('#', ' ')
-    nome_formatado = nome_invocador.replace(' ', '-').lower()
-    url = f"https://www.leagueofgraphs.com/summoner/{regiao.lower()}/{nome_formatado}"
+    
+    print("-" * 50)
+    print(f"Buscando dados para: {nome_invocador} na região {regiao.upper()}")
+    
+    parts = nome_invocador.strip().split('#', 1)
+    game_name = parts[0]
+    tagline = parts[1] if len(parts) > 1 else None
+    encoded_game_name = quote(game_name)
+
+    if tagline:
+        nome_formatado = f"{encoded_game_name}-{tagline}"
+    else:
+        nome_formatado = encoded_game_name
+    
+    url = f"https://www.leagueofgraphs.com/summoner/{regiao.lower()}/{nome_formatado.lower()}"
+    print(f"Acessando URL: {url}")
+    
     headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "pt-BR,pt;q=0.9"}
 
     try:
         resposta = requests.get(url, headers=headers, timeout=10)
         resposta.raise_for_status()
     except requests.exceptions.RequestException as e:
+        print(f"ERRO DE CONEXÃO: {e}")
         return {"erro": f"Erro de conexão: {e}"}
 
     soup = BeautifulSoup(resposta.text, 'html.parser')
-
+    script_content = resposta.text
+    
     roles_data = []
+
+    # Tenta extrair dados da tabela HTML
+    print("\n[DIAGNÓSTICO] Tentando extrair dados via tabela HTML...")
     roles_table_container = soup.find('div', {'data-tab-id': 'championsData-soloqueue'})
     if roles_table_container:
-        roles_table = roles_table_container.find('table')
+        # --- CORREÇÃO PRINCIPAL AQUI ---
+        # Procura por QUALQUER tabela dentro do container, tornando o código mais robusto
+        roles_table = roles_table_container.find('table') 
         
-        # --- MUDANÇA: Adicionada verificação para garantir que a tabela existe ---
         if roles_table:
-            # Pula a primeira linha (cabeçalho da tabela)
             for row in roles_table.find_all('tr')[1:]:
                 cols = row.find_all('td')
-                if len(cols) == 3:
+                if len(cols) >= 3: # Mudado para 'maior ou igual' por segurança
                     try:
                         role_name = cols[0].find('div', class_='txt name').text.strip()
                         played = int(cols[1]['data-sort-value'])
-                        winrate_raw = float(cols[2]['data-sort-value'])
-                        winrate = round(winrate_raw * 100, 1)
+                        winrate = round(float(cols[2]['data-sort-value']) * 100, 1)
                         
                         roles_data.append({
                             "role": role_name,
                             "played": played,
                             "winrate": winrate
                         })
-                    except (AttributeError, ValueError, KeyError) as e:
-                        print(f"Erro ao extrair dados da rota: {e}")
-        # --- FIM DA MUDANÇA ---
+                    except (AttributeError, ValueError, KeyError, TypeError) as e:
+                        print(f"[DIAGNÓSTICO] Erro ao processar linha da tabela: {e}")
+            if roles_data:
+                print(f"[DIAGNÓSTICO] Sucesso! Dados da tabela extraídos. Roles: {[role['role'] for role in roles_data]}")
+            else:
+                print("[DIAGNÓSTICO] Tabela encontrada, mas não foi possível extrair dados das linhas.")
+        else:
+            print("[DIAGNÓSTICO] Container de roles encontrado, mas NENHUMA tabela foi encontrada dentro dele.")
+    else:
+        print("[DIAGNÓSTICO] Container 'championsData-soloqueue' não foi encontrado na página.")
 
     kda_medio = "N/A"
     kda_div = soup.find('div', class_='kda')
@@ -58,13 +84,11 @@ def obter_dados_summoner(nome_invocador: str, regiao: str, id_por_nome_campeao: 
                 kda_medio = f"{kills:.1f} / {deaths:.1f} / {assists:.1f}   ({kda_val:.2f} KDA)"
             else:
                 kda_medio = f"{kills:.1f} / {deaths:.1f} / {assists:.1f}   (Perfeito)"
-        except (ValueError, AttributeError) as e:
-            print(f"Erro ao extrair KDA: {e}")
+        except (ValueError, AttributeError): pass
 
     meta_desc = soup.find('meta', attrs={'name': 'twitter:description'})
     meta_img = soup.find('meta', attrs={'name': 'twitter:image'})
     
-    script_content = resposta.text
     graphdata_match = re.search(r'const graphData\s*=\s*(\[.*?\]);', script_content, re.DOTALL)
     rankmap_match = re.search(r'const graphIntegerValues24\s*=\s*(\[.*?\]);', script_content, re.DOTALL)
 
@@ -113,4 +137,5 @@ def obter_dados_summoner(nome_invocador: str, regiao: str, id_por_nome_campeao: 
             "nome": nome.strip(), "winrate": win, "partidas": played,
             "ranking": rank, "icon_url": icon_url
         })
+    print("-" * 50)
     return dados

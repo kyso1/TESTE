@@ -34,47 +34,34 @@ class ModernScrollableFrame(ttk.Frame):
     def __init__(self, container, *args, **kwargs):
         super().__init__(container, *args, **kwargs)
 
-        # --- LÓGICA DE SCROLL REESCRITA E CORRIGIDA ---
         self.canvas = tk.Canvas(self, bg=BG_COLOR, highlightthickness=0)
         self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
-        
-        # Este é o frame que vai conter todos os widgets e será rolável
         self.scrollable_frame = ttk.Frame(self.canvas, style="TFrame")
 
-        # Vincula a configuração da scroll region ao tamanho do frame interno
         self.scrollable_frame.bind(
             "<Configure>",
             lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
         )
 
-        # Adiciona o frame ao canvas
         self.canvas_window = self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
         
-        # **A CORREÇÃO PRINCIPAL**: Força a largura do frame interno a ser igual à do canvas
-        # Isso impede que o conteúdo "vaze" para fora da tela
         self.scrollable_frame.bind("<Configure>", self._on_frame_configure)
         self.canvas.bind("<Configure>", self._on_canvas_configure)
 
-        # Empacotamento
         self.canvas.pack(side="left", fill="both", expand=True)
         self.scrollbar.pack(side="right", fill="y")
         
-        # Vinculação do scroll do mouse
         self.canvas.bind("<Enter>", self._bind_mousewheel)
         self.canvas.bind("<Leave>", self._unbind_mousewheel)
 
     def _on_canvas_configure(self, event):
-        # Atualiza a largura do frame interno sempre que o canvas for redimensionado
         self.canvas.itemconfig(self.canvas_window, width=event.width)
         
     def _on_frame_configure(self, event):
-        # Atualiza a região de rolagem do canvas
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
         
     def _on_mousewheel(self, event):
-        # Lógica de scroll multiplataforma
-        # Windows/macOS usam 'delta', Linux usa 'num'
         if event.num == 4 or event.delta > 0:
             self.canvas.yview_scroll(-1, "units")
         elif event.num == 5 or event.delta < 0:
@@ -97,7 +84,7 @@ class LoLScraperApp:
         self.root.title("LoL Analytics Mobile")
         self.root.configure(bg=BG_COLOR)
         
-        largura, altura = 410, 690  # Altura reduzida para caber melhor em telas menores
+        largura, altura = 410, 690
         self.root.geometry(f"{largura}x{altura}")
         self.root.resizable(False, False)
 
@@ -203,7 +190,6 @@ class LoLScraperApp:
     def criar_frame_resultados(self):
         self.resultado_frame = ttk.Frame(self.resultado_container, style="TFrame")
         self.resultado_frame.pack(fill="both", expand=True)
-        # Garante que o conteúdo dentro do frame de resultados também se expanda
         self.resultado_frame.columnconfigure(0, weight=1)
 
     def worker_busca(self, nome, regiao):
@@ -222,7 +208,6 @@ class LoLScraperApp:
         self.buscar_btn.config(state="normal", text="Analisar Jogador")
 
     def _preencher_dados(self, dados):
-        # Frame container para todo o perfil, para garantir o preenchimento
         profile_container = ttk.Frame(self.resultado_frame, style="TFrame")
         profile_container.pack(fill="x", expand=True)
 
@@ -277,13 +262,19 @@ class LoLScraperApp:
 
     def plotar_grafico_radar(self, parent, roles_data):
         try:
-            labels = [role['role'] for role in roles_data]
-            values = [role['played'] for role in roles_data]
-            if not labels or not any(values):
-                ttk.Label(parent, text="Sem dados de rotas.", foreground=SECONDARY_TEXT, font=(FONT_FAMILY, 10)).pack(pady=20)
+            roles_data_filtrado = [role for role in roles_data if role.get('played', 0) > 0]
+            if not roles_data_filtrado:
+                ttk.Label(parent, text="Sem dados de rotas para exibir.", foreground=SECONDARY_TEXT, font=(FONT_FAMILY, 10)).pack(pady=20)
                 return
+                
+            labels = [role['role'] for role in roles_data_filtrado]
+            values = [role['played'] for role in roles_data_filtrado]
 
             num_vars = len(labels)
+            if num_vars < 3:
+                ttk.Label(parent, text="Dados de rotas insuficientes para o gráfico.", foreground=SECONDARY_TEXT, font=(FONT_FAMILY, 10)).pack(pady=20)
+                return
+
             angles = np.linspace(0, 2 * np.pi, num_vars, endpoint=False).tolist()
             values_circular = values + values[:1]
             angles_circular = angles + angles[:1]
@@ -318,14 +309,19 @@ class LoLScraperApp:
                 ttk.Label(parent, text="Sem dados suficientes para o gráfico de ranking.", foreground=SECONDARY_TEXT, font=(FONT_FAMILY, 10)).pack(pady=20)
                 return
 
-            # Corrige timestamp (ms ou s)
             timestamps = []
             for x in graph_data:
                 ts = x[0]
-                if ts > 1e10:
-                    ts = ts / 1000
-                timestamps.append(datetime.fromtimestamp(ts))
-            ranks_indices = [float(x[1]) for x in graph_data]
+                try:
+                    timestamps.append(datetime.fromtimestamp(ts / 1000))
+                except (ValueError, TypeError):
+                    continue
+            
+            if not timestamps:
+                 ttk.Label(parent, text="Não foi possível processar as datas do ranking.", foreground=SECONDARY_TEXT, font=(FONT_FAMILY, 10)).pack(pady=20)
+                 return
+
+            ranks_indices = [float(x[1]) for x in graph_data if x[1] is not None]
 
             plt.rcdefaults()
             fig, ax = plt.subplots(figsize=(3.6, 2.2), dpi=100)
@@ -335,10 +331,10 @@ class LoLScraperApp:
             ax.plot(timestamps, ranks_indices, color=ACCENT_COLOR, linewidth=2, marker='o', markersize=4, markerfacecolor=ACCENT_COLOR, markeredgecolor=BG_COLOR)
             ax.set_title("Evolução do Ranking", fontsize=10, color=TEXT_COLOR, weight='bold')
             ax.set_ylabel("Elo", fontsize=9, color=SECONDARY_TEXT)
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
+            
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m/%y'))
             plt.setp(ax.xaxis.get_majorticklabels(), rotation=30, ha='right')
 
-            # Ticks de ranking
             if rank_map and isinstance(rank_map, list) and len(rank_map) > 0 and isinstance(rank_map[0], dict):
                 tick_positions = [i for i, r in enumerate(rank_map) if r.get('rankStr') == 'IV' or r.get('rankId') == 0]
                 tick_labels = [r.get('tierRankString', str(i)) for i, r in enumerate(rank_map) if i in tick_positions]
